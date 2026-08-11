@@ -13,12 +13,10 @@ const { v4: uuidv4 } = require("uuid");
 const db = require("../db/database");
 const { authenticate } = require("../middleware/auth");
 
-
 const router = express.Router();
 const PRESIDENT_PHONE = "+22890496651";
 const SECRET = process.env.JWT_SECRET || "change_me_in_production";
 const SALT_ROUNDS = 10;
-
 
 /** Crée un code de parrainage unique à 6 caractères */
 function makeReferralCode() {
@@ -27,7 +25,6 @@ function makeReferralCode() {
   for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
   return "HWT-" + code;
 }
-
 
 /** Transforme la ligne SQL en objet utilisateur propre */
 function toUser(row) {
@@ -57,14 +54,12 @@ function toUser(row) {
   };
 }
 
-
 /**
  * POST /auth/register
  * Body : { name, surname, phone, password, profession?, neighborhood?, referrerCode? }
  */
 router.post("/register", (req, res) => {
   const { name, surname, phone, password, profession, neighborhood, referrerCode } = req.body;
-
 
   if (!name || !surname || !phone || !password) {
     return res.status(400).json({ success: false, message: "Nom, prénom, téléphone et mot de passe obligatoires" });
@@ -76,13 +71,11 @@ router.post("/register", (req, res) => {
     return res.status(400).json({ success: false, message: "Numéro de téléphone invalide" });
   }
 
-
   // Le téléphone existe déjà ?
   const existing = db.prepare("SELECT id FROM users WHERE phone = ?").get(phone.trim());
   if (existing) {
     return res.status(409).json({ success: false, message: "Ce numéro est déjà utilisé. Connectez-vous plutôt." });
   }
-
 
   // Parrain valide ?
   let referrerId = null;
@@ -96,7 +89,94 @@ router.post("/register", (req, res) => {
     db.prepare("UPDATE users SET network_count = network_count + 1 WHERE id = ?").run(referrerId);
   }
 
-
   const id = uuidv4();
   const referralCode = makeReferralCode();
   const passwordHash = bcrypt.hashSync(password, SALT_ROUNDS);
+  const normalizedPhone = phone.trim();
+  const initialGrade = normalizedPhone === PRESIDENT_PHONE ? "president" : "membre";
+
+  db.prepare(`
+    INSERT INTO users (id, name, surname, phone, profession, neighborhood,
+      referral_code, referrer_id, grade, password_hash)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, name.trim(), surname.trim(), normalizedPhone,
+    (profession || "").trim(), (neighborhood || "").trim(), referralCode, referrerId, initialGrade, passwordHash);
+
+  const user = toUser(db.prepare("SELECT * FROM users WHERE id = ?").get(id));
+  const token = jwt.sign({ id: user.id }, SECRET, { expiresIn: "30d" });
+
+  // Notification de bienvenue
+  db.prepare(`INSERT INTO notifications (id, user_id, type, title, body)
+    VALUES (?, ?, 'system', 'Bienvenue sur Hawtrix !',
+    'Votre compte a été créé avec succès. Code parrainage : ${referralCode}')`)
+    .run(uuidv4(), id);
+
+  res.status(201).json({
+    success: true,
+    message: "Compte créé avec succès",
+    user,
+    token,
+  });
+});
+
+/**
+ * POST /auth/login
+ * Body : { phone, password }
+ */
+router.post("/login", (req, res) => {
+  const { phone, password } = req.body;
+
+  if (!phone || !password) {
+    return res.status(400).json({ success: false, message: "Téléphone et mot de passe obligatoires" });
+  }
+
+  let userRow = db.prepare("SELECT * FROM users WHERE phone = ?").get(phone.trim());
+  if (!userRow) {
+    return res.status(401).json({ success: false, message: "Numéro introuvable. Créez un compte d'abord." });
+  }
+
+  const ok = bcrypt.compareSync(password, userRow.password_hash);
+  if (!ok) {
+    return res.status(401).json({ success: false, message: "Mot de passe incorrect" });
+  }
+  // Migration transparente de l’ancien compte local vers le grade président serveur.
+  if (phone.trim() === PRESIDENT_PHONE && userRow.grade !== "president") {
+    db.prepare("UPDATE users SET grade = 'president' WHERE id = ?").run(userRow.id);
+    userRow = db.prepare("SELECT * FROM users WHERE id = ?").get(userRow.id);
+  }
+  if (userRow.is_banned) {
+    return res.status(403).json({ success: false, message: "Ce compte a été banni par l'administrateur" });
+  }
+
+  const user = toUser(userRow);
+  const token = jwt.sign({ id: user.id }, SECRET, { expiresIn: "30d" });
+
+  res.json({ success: true, message: "Connexion réussie", user, token });
+});
+
+/** GET /auth/me — profil de l'utilisateur connecté */
+router.get("/me", authenticate, (req, res) => {
+  const user = toUser(db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id));
+  res.json({ success: true, user });
+});
+
+/** PUT /auth/me — mise à jour du profil */
+router.put("/me", authenticate, (req, res) => {
+  const { name, surname, profession, neighborhood, bio, skills, avatar } = req.body;
+  db.prepare(`UPDATE users SET
+      name = COALESCE(?, name),
+      surname = COALESCE(?, surname),
+      profession = COALESCE(?, profession),
+      neighborhood = COALESCE(?, neighborhood),
+      bio = COALESCE(?, bio),
+      skills = COALESCE(?, skills),
+      avatar = COALESCE(?, avatar)
+    WHERE id = ?`)
+    .run(name, surname, profession, neighborhood,
+      bio, skills ? JSON.stringify(skills) : undefined, avatar, req.user.id);
+
+  const user = toUser(db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id));
+  res.json({ success: true, message: "Profil mis à jour", user });
+});
+
+module.exports = router;
