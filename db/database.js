@@ -91,6 +91,14 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages (conversation_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications (user_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_withdrawals_user ON withdrawals (user_id);
+
+CREATE TABLE IF NOT EXISTS membership_events (
+id TEXT PRIMARY KEY,
+user_id TEXT NOT NULL UNIQUE,
+amount REAL NOT NULL,
+referrer_id TEXT DEFAULT NULL,
+created_at TEXT DEFAULT (datetime('now'))
+);
 `);
 
 module.exports = db;
