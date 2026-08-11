@@ -1,20 +1,19 @@
 /**
- * middleware/auth.js — Vérification des jetons JWT et accès admin
- * ==============================================================
- * Deux niveaux de protection :
- *  - authenticate : l'utilisateur est connecté (jeton JWT valide)
- *  - adminOnly    : réservé à l'administrateur (jeton admin)
+ * middleware/auth.js â€” VÃ©rification des jetons JWT et accÃ¨s admin
  */
 const jwt = require("jsonwebtoken");
 const db = require("../db/database");
 
 const SECRET = process.env.JWT_SECRET || "change_me_in_production";
 
-/** Extrait et vérifie le jeton JWT de l'en-tête Authorization */
-function authenticate(req, res, next) {
+function readBearer(req) {
   const header = req.headers.authorization || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+  return header.startsWith("Bearer ") ? header.slice(7) : "";
+}
 
+/** Extrait et vÃ©rifie le jeton JWT de l'en-tÃªte Authorization. */
+function authenticate(req, res, next) {
+  const token = readBearer(req);
   if (!token) {
     return res.status(401).json({ success: false, message: "Connexion requise" });
   }
@@ -24,23 +23,43 @@ function authenticate(req, res, next) {
     const user = db.prepare("SELECT * FROM users WHERE id = ?").get(payload.id);
 
     if (!user) return res.status(401).json({ success: false, message: "Utilisateur introuvable" });
-    if (user.is_banned) return res.status(403).json({ success: false, message: "Ce compte a été banni" });
+    if (user.is_banned) return res.status(403).json({ success: false, message: "Ce compte a Ã©tÃ© banni" });
+    if (user.is_suspended) return res.status(403).json({ success: false, message: "Ce compte est suspendu" });
 
     req.user = user;
     next();
   } catch (err) {
-    return res.status(401).json({ success: false, message: "Session expirée, reconnectez-vous" });
+    return res.status(401).json({ success: false, message: "Session expirÃ©e, reconnectez-vous" });
   }
 }
 
-/** Vérifie le jeton admin (Authorization: Bearer ADMIN_xxx) */
+/**
+ * Autorise le jeton serveur historique ou le JWT d'un compte PrÃ©sident.
+ * Le grade est relu dans SQLite Ã  chaque requÃªte afin qu'une modification
+ * de grade soit immÃ©diatement prise en compte sans perte de session.
+ */
 function adminOnly(req, res, next) {
-  const header = req.headers.authorization || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-  if (token === (process.env.ADMIN_SECRET_TOKEN || "")) {
+  const token = readBearer(req);
+  const configuredAdminToken = process.env.ADMIN_SECRET_TOKEN || "";
+
+  if (configuredAdminToken && token === configuredAdminToken) return next();
+  if (!token) return res.status(403).json({ success: false, message: "AccÃ¨s admin refusÃ©" });
+
+  try {
+    const payload = jwt.verify(token, SECRET);
+    const user = db.prepare("SELECT * FROM users WHERE id = ?").get(payload.id);
+    if (!user) return res.status(403).json({ success: false, message: "AccÃ¨s admin refusÃ©" });
+    if (user.is_banned || user.is_suspended) {
+      return res.status(403).json({ success: false, message: "Compte PrÃ©sident indisponible" });
+    }
+    if (user.grade !== "president") {
+      return res.status(403).json({ success: false, message: "AccÃ¨s rÃ©servÃ© au PrÃ©sident" });
+    }
+    req.user = user;
     return next();
+  } catch (err) {
+    return res.status(403).json({ success: false, message: "AccÃ¨s admin refusÃ©" });
   }
-  return res.status(403).json({ success: false, message: "Accès admin refusé" });
 }
 
 module.exports = { authenticate, adminOnly };
