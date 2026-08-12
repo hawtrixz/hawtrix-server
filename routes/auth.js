@@ -230,9 +230,12 @@ router.post("/login", (req, res) => {
     db.prepare("UPDATE users SET grade = 'president' WHERE id = ?").run(userRow.id);
     userRow = db.prepare("SELECT * FROM users WHERE id = ?").get(userRow.id);
   }
-  if (userRow.is_banned) {
-    return res.status(403).json({ success: false, message: "Ce compte a Ã©tÃ© banni par l'administrateur" });
-  }
+  if (userRow.is_suspended) {
+  return res.status(403).json({
+    success: false,
+    message: "Ce compte est temporairement suspendu par l'administrateur",
+  });
+}
 
   const user = toUser(userRow);
   const token = jwt.sign({ id: user.id }, SECRET, { expiresIn: "30d" });
