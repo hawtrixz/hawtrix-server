@@ -96,7 +96,27 @@ router.post("/conversations", authenticate, (req, res) => {
  * GET /chat/conversations/:id
  * Retourne les messages d'une conversation (avec marquage "lu").
  */
-router.get("/conversations/:id", authenticate, (req, res) => {
+router.get("/conversations/:id", authenticate, (req, res) => {const conversation = db.prepare(
+  "SELECT * FROM conversations WHERE id = ?"
+).get(req.params.id);
+
+if (!conversation) {
+  return res.status(404).json({
+    success: false,
+    message: "Conversation introuvable",
+  });
+}
+
+if (
+  conversation.user_a_id !== req.user.id &&
+  conversation.user_b_id !== req.user.id
+) {
+  return res.status(403).json({
+    success: false,
+    message: "Accès refusé à cette conversation",
+  });
+}
+
   const messages = db.prepare(`
     SELECT m.*, u.name, u.surname
     FROM messages m
