@@ -42,10 +42,28 @@ function findReferrer(code) {
 
 /** CrÃ©e un code de parrainage unique Ã  6 caractÃ¨res */
 function makeReferralCode() {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let code = "";
-  for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
-  return "HWT-" + code;
+  const letters = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+  const digits = "23456789";
+  const pick = (source) => source[Math.floor(Math.random() * source.length)];
+  const shuffle = (items) => items.sort(() => Math.random() - 0.5).join("");
+
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const code = shuffle([
+      pick(letters),
+      pick(letters),
+      pick(letters),
+      pick(digits),
+      pick(digits),
+    ]);
+
+    const exists = db.prepare(
+      "SELECT 1 FROM users WHERE referral_code = ? LIMIT 1"
+    ).get(code);
+
+    if (!exists) return code;
+  }
+
+  throw new Error("Impossible de générer un code de parrainage unique");
 }
 
 /** Transforme la ligne SQL en objet utilisateur propre */
