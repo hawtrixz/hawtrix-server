@@ -91,6 +91,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages (conversation_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications (user_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_withdrawals_user ON withdrawals (user_id);
+  CREATE INDEX IF NOT EXISTS idx_users_phone ON users (phone);
 
 CREATE TABLE IF NOT EXISTS membership_events (
 id TEXT PRIMARY KEY,
@@ -100,5 +101,27 @@ referrer_id TEXT DEFAULT NULL,
 created_at TEXT DEFAULT (datetime('now'))
 );
 `);
+// Migration non destructive des comptes historiques.
+try {
+  db.exec("ALTER TABLE users ADD COLUMN normalized_phone TEXT");
+} catch (err) {
+  if (!String(err.message).includes("duplicate column name")) throw err;
+}
+
+const normalizePhone = (phone) => String(phone || "").replace(/\D/g, "");
+const users = db.prepare("SELECT id, phone, normalized_phone FROM users").all();
+const updatePhone = db.prepare("UPDATE users SET normalized_phone = ? WHERE id = ?");
+const presidentPhone = normalizePhone("+22890496651");
+const migratePhones = db.transaction(() => {
+  for (const row of users) {
+    const normalized = normalizePhone(row.phone);
+    if (row.normalized_phone !== normalized) updatePhone.run(normalized, row.id);
+  }
+  const president = users.find((row) => normalizePhone(row.phone) === presidentPhone);
+  if (president) db.prepare("UPDATE users SET grade = 'president' WHERE id = ?").run(president.id);
+});
+migratePhones();
+
+db.exec("CREATE INDEX IF NOT EXISTS idx_users_normalized_phone ON users (normalized_phone)");
 
 module.exports = db;
