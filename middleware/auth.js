@@ -43,22 +43,22 @@ function adminOnly(req, res, next) {
   const configuredAdminToken = process.env.ADMIN_SECRET_TOKEN || "";
 
   if (configuredAdminToken && token === configuredAdminToken) return next();
-  if (!token) return res.status(403).json({ success: false, message: "AccÃ¨s admin refusÃ©" });
+  if (!token) return res.status(403).json({ success: false, message: "Accès admin refusé" });
 
   try {
     const payload = jwt.verify(token, SECRET);
     const user = db.prepare("SELECT * FROM users WHERE id = ?").get(payload.id);
-    if (!user) return res.status(403).json({ success: false, message: "AccÃ¨s admin refusÃ©" });
+    if (!user) return res.status(403).json({ success: false, message: "Accès admin refusé" });
     if (user.is_banned || user.is_suspended) {
-      return res.status(403).json({ success: false, message: "Compte PrÃ©sident indisponible" });
+      return res.status(403).json({ success: false, message: "Compte Président indisponible" });
     }
     if (user.grade !== "president") {
-      return res.status(403).json({ success: false, message: "AccÃ¨s rÃ©servÃ© au PrÃ©sident" });
+      return res.status(403).json({ success: false, message: "Accès réservé au Président" });
     }
     req.user = user;
     return next();
   } catch (err) {
-    return res.status(403).json({ success: false, message: "AccÃ¨s admin refusÃ©" });
+    return res.status(403).json({ success: false, message: "Accès admin refusé" });
   }
 }
 
