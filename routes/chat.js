@@ -47,14 +47,21 @@ router.get("/users", authenticate, (req, res) => {
   if (q) {
     const like = `%${q}%`;
     rows = db.prepare(`
-      SELECT id, name, surname, phone, profession, referral_code
-      FROM users WHERE (name LIKE ? OR surname LIKE ? OR phone LIKE ?) AND id != ?
+      SELECT id, name, surname, phone, profession, neighborhood,
+        referral_code, is_banned, is_suspended
+      FROM users
+      WHERE (name LIKE ? OR surname LIKE ? OR phone LIKE ?
+        OR profession LIKE ? OR neighborhood LIKE ?)
+        AND id != ?
       LIMIT 30
-    `).all(like, like, like, req.user.id);
+    `).all(like, like, like, like, like, req.user.id);
   } else {
     rows = db.prepare(`
-      SELECT id, name, surname, phone, profession, referral_code
-      FROM users WHERE id != ? ORDER BY created_at DESC LIMIT 30
+      SELECT id, name, surname, phone, profession, neighborhood,
+        referral_code, is_banned, is_suspended
+      FROM users
+      WHERE id != ? AND is_banned = 0
+      ORDER BY created_at DESC LIMIT 30
     `).all(req.user.id);
   }
   res.json({ success: true, users: rows });
