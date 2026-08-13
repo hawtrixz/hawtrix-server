@@ -114,7 +114,8 @@ router.post("/register", (req, res) => {
   // Le tÃ©lÃ©phone existe dÃ©jÃ  ? Comparaison normalisÃ©e pour conserver les
   // comptes historiques mÃªme si l'ancien format incluait espaces ou prÃ©fixes.
   const normalizedInputPhone = normalizePhone(phone);
-  const existing = db.prepare("SELECT id FROM users").all().find((row) => normalizePhone(row.phone) === normalizedInputPhone);
+  const existing = db.prepare("SELECT id FROM users WHERE normalized_phone = ?").get(normalizedInputPhone)
+  || db.prepare("SELECT id FROM users").all().find((row) => normalizePhone(row.phone) === normalizedInputPhone);
   if (existing) {
     return res.status(409).json({ success: false, message: "Ce numÃ©ro est dÃ©jÃ  utilisÃ©. Connectez-vous plutÃ´t." });
   }
@@ -137,10 +138,14 @@ router.post("/register", (req, res) => {
   const initialGrade = normalizePhone(normalizedPhone) === normalizePhone(PRESIDENT_PHONE) ? "president" : "membre";
 
   db.prepare(`
-    INSERT INTO users (id, name, surname, phone, profession, neighborhood,
+    INSERT INTO users (id, name, surname, phone, normalized_phone, profession, neighborhood,
+  referral_code, referrer_id, grade, password_hash)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+
       referral_code, referrer_id, grade, password_hash)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, name.trim(), surname.trim(), normalizedPhone,
+  `).run(id, name.trim(), surname.trim(), normalizedPhone, normalizePhone(normalizedPhone),
+  (profession || "").trim(), (neighborhood || "").trim(), referralCode, referrerId, initialGrade, passwordHash);
     (profession || "").trim(), (neighborhood || "").trim(), referralCode, referrerId, initialGrade, passwordHash);
 
   // L'inscription serveur rÃ©ussie vaut adhÃ©sion payÃ©e de 2 000 FCFA.
@@ -216,7 +221,11 @@ router.post("/login", (req, res) => {
     return res.status(400).json({ success: false, message: "TÃ©lÃ©phone et mot de passe obligatoires" });
   }
 
-  let userRow = db.prepare("SELECT * FROM users").all().find((row) => normalizePhone(row.phone) === normalizePhone(phone));
+  const normalizedLoginPhone = normalizePhone(phone);
+let userRow = db.prepare("SELECT * FROM users WHERE normalized_phone = ?").get(normalizedLoginPhone);
+if (!userRow) {
+  userRow = db.prepare("SELECT * FROM users").all().find((row) => normalizePhone(row.phone) === normalizedLoginPhone);
+}
   if (!userRow) {
     return res.status(401).json({ success: false, message: "NumÃ©ro introuvable. CrÃ©ez un compte d'abord." });
   }
@@ -227,9 +236,9 @@ router.post("/login", (req, res) => {
   }
   // Migration transparente de lâ€™ancien compte local vers le grade prÃ©sident serveur.
   if (normalizePhone(phone) === normalizePhone(PRESIDENT_PHONE) && userRow.grade !== "president") {
-    db.prepare("UPDATE users SET grade = 'president' WHERE id = ?").run(userRow.id);
-    userRow = db.prepare("SELECT * FROM users WHERE id = ?").get(userRow.id);
-  }
+  db.prepare("UPDATE users SET grade = 'president' WHERE id = ?").run(userRow.id);
+  userRow = db.prepare("SELECT * FROM users WHERE id = ?").get(userRow.id);
+}
   if (userRow.is_suspended) {
   return res.status(403).json({
     success: false,
