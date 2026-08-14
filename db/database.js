@@ -83,6 +83,25 @@ db.exec(`
     code TEXT DEFAULT '',
     created_at TEXT DEFAULT (datetime('now'))
   );
+
+  CREATE TABLE IF NOT EXISTS opportunities (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    org TEXT NOT NULL DEFAULT '',
+    country TEXT NOT NULL DEFAULT '',
+    deadline TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    requirements TEXT NOT NULL DEFAULT '',
+    url TEXT NOT NULL,
+    apply_info TEXT NOT NULL DEFAULT '',
+    image TEXT NOT NULL DEFAULT 'briefcase',
+    color TEXT NOT NULL DEFAULT '#10B981',
+    edition TEXT NOT NULL DEFAULT '',
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
 `);
 
 // Index pour accélérer les requêtes fréquentes
@@ -91,6 +110,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages (conversation_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications (user_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_withdrawals_user ON withdrawals (user_id);
+  CREATE INDEX IF NOT EXISTS idx_opportunities_active ON opportunities (active, updated_at);
   CREATE INDEX IF NOT EXISTS idx_users_phone ON users (phone);
 
 CREATE TABLE IF NOT EXISTS membership_events (
@@ -101,7 +121,10 @@ referrer_id TEXT DEFAULT NULL,
 created_at TEXT DEFAULT (datetime('now'))
 );
 `);
-// Migration non destructive des comptes historiques.
+
+// Migration non destructive pour les comptes historiques : le téléphone brut est
+// conservé pour ne perdre aucune donnée, tandis qu’une colonne normalisée permet
+// de retrouver le même compte malgré espaces, tirets ou indicatif présenté autrement.
 try {
   db.exec("ALTER TABLE users ADD COLUMN normalized_phone TEXT");
 } catch (err) {
@@ -125,3 +148,4 @@ migratePhones();
 db.exec("CREATE INDEX IF NOT EXISTS idx_users_normalized_phone ON users (normalized_phone)");
 
 module.exports = db;
+
