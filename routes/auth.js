@@ -1,10 +1,5 @@
 /**
- * routes/auth.js â€” Inscription, connexion et profil utilisateur
- * =============================================================
- * POST /auth/register  â†’ crÃ©e un compte (tÃ©lÃ©phone + nom + prÃ©nom + profession + quartier)
- * POST /auth/login     â†’ connexion par tÃ©lÃ©phone + mot de passe
- * GET  /auth/me        â†’ profil de l'utilisateur connectÃ©
- * PUT  /auth/me        â†’ mise Ã  jour du profil
+ * routes/auth.js — Inscription, connexion et profil utilisateur
  */
 const express = require("express");
 const bcrypt = require("bcryptjs");
@@ -25,22 +20,29 @@ function normalizePhone(phone) {
 }
 
 function normalizeReferralCode(code) {
-  return String(code || "").trim().toUpperCase().replace(/\s+/g, "").replace(/^HWT[-_]?/, "");
+  return String(code || "")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, "")
+    .replace(/^HWT[-_]?/, "");
 }
 
 function findPresident() {
   const rows = db.prepare("SELECT * FROM users").all();
-  return rows.find((row) => normalizePhone(row.phone) === normalizePhone(PRESIDENT_PHONE)) || null;
+  return rows.find(
+    (row) => normalizePhone(row.phone) === normalizePhone(PRESIDENT_PHONE)
+  ) || null;
 }
 
 function findReferrer(code) {
   const wanted = normalizeReferralCode(code);
   if (!wanted) return null;
   const rows = db.prepare("SELECT * FROM users").all();
-  return rows.find((row) => normalizeReferralCode(row.referral_code) === wanted) || null;
+  return rows.find(
+    (row) => normalizeReferralCode(row.referral_code) === wanted
+  ) || null;
 }
 
-/** CrÃ©e un code de parrainage unique Ã  6 caractÃ¨res */
 function makeReferralCode() {
   const letters = "ABCDEFGHJKLMNPQRSTUVWXYZ";
   const digits = "23456789";
@@ -56,9 +58,9 @@ function makeReferralCode() {
       pick(digits),
     ]);
 
-    const exists = db.prepare(
-      "SELECT 1 FROM users WHERE referral_code = ? LIMIT 1"
-    ).get(code);
+    const exists = db
+      .prepare("SELECT 1 FROM users WHERE referral_code = ? LIMIT 1")
+      .get(code);
 
     if (!exists) return code;
   }
@@ -66,7 +68,6 @@ function makeReferralCode() {
   throw new Error("Impossible de générer un code de parrainage unique");
 }
 
-/** Transforme la ligne SQL en objet utilisateur propre */
 function toUser(row) {
   if (!row) return null;
   return {
@@ -94,39 +95,65 @@ function toUser(row) {
   };
 }
 
-/**
- * POST /auth/register
- * Body : { name, surname, phone, password, profession?, neighborhood?, referrerCode? }
- */
 router.post("/register", (req, res) => {
-  const { name, surname, phone, password, profession, neighborhood, referrerCode } = req.body;
+  const {
+    name,
+    surname,
+    phone,
+    password,
+    profession,
+    neighborhood,
+    referrerCode,
+  } = req.body;
 
   if (!name || !surname || !phone || !password) {
-    return res.status(400).json({ success: false, message: "Nom, prÃ©nom, tÃ©lÃ©phone et mot de passe obligatoires" });
+    return res.status(400).json({
+      success: false,
+      message: "Nom, prénom, téléphone et mot de passe obligatoires",
+    });
   }
+
   if (password.length < 6) {
-    return res.status(400).json({ success: false, message: "Le mot de passe doit faire au moins 6 caractÃ¨res" });
+    return res.status(400).json({
+      success: false,
+      message: "Le mot de passe doit faire au moins 6 caractères",
+    });
   }
+
   if (phone.replace(/\D/g, "").length < 8) {
-    return res.status(400).json({ success: false, message: "NumÃ©ro de tÃ©lÃ©phone invalide" });
+    return res.status(400).json({
+      success: false,
+      message: "Numéro de téléphone invalide",
+    });
   }
 
-  // Le tÃ©lÃ©phone existe dÃ©jÃ  ? Comparaison normalisÃ©e pour conserver les
-  // comptes historiques mÃªme si l'ancien format incluait espaces ou prÃ©fixes.
   const normalizedInputPhone = normalizePhone(phone);
-  const existing = db.prepare("SELECT id FROM users WHERE normalized_phone = ?").get(normalizedInputPhone)
-  || db.prepare("SELECT id FROM users").all().find((row) => normalizePhone(row.phone) === normalizedInputPhone);
+  const existing =
+    db.prepare("SELECT id FROM users WHERE normalized_phone = ?").get(
+      normalizedInputPhone
+    ) ||
+    db
+      .prepare("SELECT id, phone FROM users")
+      .all()
+      .find((row) => normalizePhone(row.phone) === normalizedInputPhone);
+
   if (existing) {
-    return res.status(409).json({ success: false, message: "Ce numÃ©ro est dÃ©jÃ  utilisÃ©. Connectez-vous plutÃ´t." });
+    return res.status(409).json({
+      success: false,
+      message: "Ce numéro est déjà utilisé. Connectez-vous plutôt.",
+    });
   }
 
-  // Le code est acceptÃ© quel que soit son format de prÃ©sentation.
   let referrer = null;
   let referrerId = null;
+
   if (referrerCode && String(referrerCode).trim()) {
     referrer = findReferrer(referrerCode);
     if (!referrer) {
-      return res.status(400).json({ success: false, message: "Code de parrainage invalide" });
+      return res.status(400).json({
+        success: false,
+        message: "Code de parrainage invalide",
+      });
     }
     referrerId = referrer.id;
   }
@@ -135,133 +162,204 @@ router.post("/register", (req, res) => {
   const referralCode = makeReferralCode();
   const passwordHash = bcrypt.hashSync(password, SALT_ROUNDS);
   const normalizedPhone = phone.trim();
-  const initialGrade = normalizePhone(normalizedPhone) === normalizePhone(PRESIDENT_PHONE) ? "president" : "membre";
+  const initialGrade =
+    normalizePhone(normalizedPhone) === normalizePhone(PRESIDENT_PHONE)
+      ? "president"
+      : "membre";
 
   db.prepare(`
-    INSERT INTO users (id, name, surname, phone, normalized_phone, profession, neighborhood,
-  referral_code, referrer_id, grade, password_hash)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO users (
+      id, name, surname, phone, normalized_phone, profession, neighborhood,
+      referral_code, referrer_id, grade, password_hash
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    name.trim(),
+    surname.trim(),
+    normalizedPhone,
+    normalizePhone(normalizedPhone),
+    (profession || "").trim(),
+    (neighborhood || "").trim(),
+    referralCode,
+    referrerId,
+    initialGrade,
+    passwordHash
+  );
 
-      referral_code, referrer_id, grade, password_hash)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, name.trim(), surname.trim(), normalizedPhone, normalizePhone(normalizedPhone),
-  (profession || "").trim(), (neighborhood || "").trim(), referralCode, referrerId, initialGrade, passwordHash);
-    (profession || "").trim(), (neighborhood || "").trim(), referralCode, referrerId, initialGrade, passwordHash);
-
-  // L'inscription serveur rÃ©ussie vaut adhÃ©sion payÃ©e de 2 000 FCFA.
-  // L'opÃ©ration est enregistrÃ©e avant les crÃ©dits et protÃ©gÃ©e par UNIQUE(user_id),
-  // afin qu'une rÃ©pÃ©tition de requÃªte ne puisse jamais payer deux fois.
   const president = findPresident();
   const credited = new Map();
+
   const credit = (userId, amount) => {
-    if (userId && amount > 0) credited.set(userId, (credited.get(userId) || 0) + amount);
+    if (userId && amount > 0) {
+      credited.set(userId, (credited.get(userId) || 0) + amount);
+    }
   };
+
   const distributeMembership = db.transaction(() => {
-    const event = db.prepare("INSERT OR IGNORE INTO membership_events (id, user_id, amount, referrer_id) VALUES (?, ?, ?, ?)")
+    const event = db
+      .prepare(
+        "INSERT OR IGNORE INTO membership_events (id, user_id, amount, referrer_id) VALUES (?, ?, ?, ?)"
+      )
       .run(uuidv4(), id, SIGNUP_FEE, referrerId);
+
     if (event.changes === 0) return false;
 
-    // RÃ©partition contractuelle de l'APK : 750 F President, 500 F direct,
-    // puis division par 3 Ã  chaque niveau supÃ©rieur ; reliquat au President.
     if (!referrerId) {
       if (president) credit(president.id, SIGNUP_FEE);
     } else {
       let remaining = SIGNUP_FEE;
+
       if (president) {
         credit(president.id, PRESIDENT_BASE_SHARE);
         remaining -= PRESIDENT_BASE_SHARE;
       }
+
       let current = referrer;
       let levelShare = 500;
       const visited = new Set();
+
       while (current && remaining > 0 && !visited.has(current.id)) {
         visited.add(current.id);
         const amount = Math.min(levelShare, remaining);
         credit(current.id, amount);
         remaining -= amount;
         levelShare = Math.max(1, Math.floor(levelShare / 3));
-        current = current.referrer_id ? db.prepare("SELECT * FROM users WHERE id = ?").get(current.referrer_id) : null;
+        current = current.referrer_id
+          ? db.prepare("SELECT * FROM users WHERE id = ?").get(current.referrer_id)
+          : null;
       }
-      if (president && remaining > 0) credit(president.id, remaining);
+
+      if (president && remaining > 0) {
+        credit(president.id, remaining);
+      }
     }
+
     for (const [userId, amount] of credited) {
-      db.prepare("UPDATE users SET balance = balance + ?, total_earnings = total_earnings + ? WHERE id = ?").run(amount, amount, userId);
-      db.prepare("INSERT INTO notifications (id, user_id, type, title, body) VALUES (?, ?, 'mlm', ?, ?)").run(uuidv4(), userId, "Commission reÃ§ue", `Votre commission d'adhÃ©sion de ${amount} FCFA a Ã©tÃ© crÃ©ditÃ©e.`);
+      db
+        .prepare(
+          "UPDATE users SET balance = balance + ?, total_earnings = total_earnings + ? WHERE id = ?"
+        )
+        .run(amount, amount, userId);
+
+      db
+        .prepare(
+          "INSERT INTO notifications (id, user_id, type, title, body) VALUES (?, ?, 'mlm', ?, ?)"
+        )
+        .run(
+          uuidv4(),
+          userId,
+          "Commission reçue",
+          `Votre commission d'adhésion de ${amount} FCFA a été créditée.`
+        );
     }
-    if (referrerId) db.prepare("UPDATE users SET network_count = network_count + 1 WHERE id = ?").run(referrerId);
+
+    if (referrerId) {
+      db
+        .prepare("UPDATE users SET network_count = network_count + 1 WHERE id = ?")
+        .run(referrerId);
+    }
+
     return true;
   });
+
   distributeMembership();
 
   const user = toUser(db.prepare("SELECT * FROM users WHERE id = ?").get(id));
   const token = jwt.sign({ id: user.id }, SECRET, { expiresIn: "30d" });
 
-  // Notification de bienvenue
-  db.prepare(`INSERT INTO notifications (id, user_id, type, title, body)
-    VALUES (?, ?, 'system', 'Bienvenue sur Hawtrix !',
-    'Votre compte a Ã©tÃ© crÃ©Ã© avec succÃ¨s. Code parrainage : ${referralCode}')`)
-    .run(uuidv4(), id);
+  db.prepare(`
+    INSERT INTO notifications (id, user_id, type, title, body)
+    VALUES (?, ?, 'system', 'Bienvenue sur Hawtrix !', ?)
+  `).run(
+    uuidv4(),
+    id,
+    `Votre compte a été créé avec succès. Code parrainage : ${referralCode}`
+  );
 
-  res.status(201).json({
+  return res.status(201).json({
     success: true,
-    message: "Compte crÃ©Ã© avec succÃ¨s",
+    message: "Compte créé avec succès",
     user,
     token,
   });
 });
 
-/**
- * POST /auth/login
- * Body : { phone, password }
- */
 router.post("/login", (req, res) => {
   const { phone, password } = req.body;
 
   if (!phone || !password) {
-    return res.status(400).json({ success: false, message: "TÃ©lÃ©phone et mot de passe obligatoires" });
+    return res.status(400).json({
+      success: false,
+      message: "Téléphone et mot de passe obligatoires",
+    });
   }
 
   const normalizedLoginPhone = normalizePhone(phone);
-let userRow = db.prepare("SELECT * FROM users WHERE normalized_phone = ?").get(normalizedLoginPhone);
-if (!userRow) {
-  userRow = db.prepare("SELECT * FROM users").all().find((row) => normalizePhone(row.phone) === normalizedLoginPhone);
-}
+  let userRow = db
+    .prepare("SELECT * FROM users WHERE normalized_phone = ?")
+    .get(normalizedLoginPhone);
+
   if (!userRow) {
-    return res.status(401).json({ success: false, message: "NumÃ©ro introuvable. CrÃ©ez un compte d'abord." });
+    userRow = db
+      .prepare("SELECT * FROM users")
+      .all()
+      .find((row) => normalizePhone(row.phone) === normalizedLoginPhone);
+  }
+
+  if (!userRow) {
+    return res.status(401).json({
+      success: false,
+      message: "Numéro introuvable. Créez un compte d'abord.",
+    });
   }
 
   const ok = bcrypt.compareSync(password, userRow.password_hash);
   if (!ok) {
-    return res.status(401).json({ success: false, message: "Mot de passe incorrect" });
+    return res.status(401).json({
+      success: false,
+      message: "Mot de passe incorrect",
+    });
   }
-  // Migration transparente de lâ€™ancien compte local vers le grade prÃ©sident serveur.
-  if (normalizePhone(phone) === normalizePhone(PRESIDENT_PHONE) && userRow.grade !== "president") {
-  db.prepare("UPDATE users SET grade = 'president' WHERE id = ?").run(userRow.id);
-  userRow = db.prepare("SELECT * FROM users WHERE id = ?").get(userRow.id);
-}
+
+  if (
+    normalizePhone(phone) === normalizePhone(PRESIDENT_PHONE) &&
+    userRow.grade !== "president"
+  ) {
+    db.prepare("UPDATE users SET grade = 'president' WHERE id = ?").run(userRow.id);
+    userRow = db.prepare("SELECT * FROM users WHERE id = ?").get(userRow.id);
+  }
+
   if (userRow.is_suspended) {
-  return res.status(403).json({
-    success: false,
-    message: "Ce compte est temporairement suspendu par l'administrateur",
-  });
-}
+    return res.status(403).json({
+      success: false,
+      message: "Ce compte est temporairement suspendu par l'administrateur",
+    });
+  }
 
   const user = toUser(userRow);
   const token = jwt.sign({ id: user.id }, SECRET, { expiresIn: "30d" });
 
-  res.json({ success: true, message: "Connexion rÃ©ussie", user, token });
+  return res.json({
+    success: true,
+    message: "Connexion réussie",
+    user,
+    token,
+  });
 });
 
-/** GET /auth/me â€” profil de l'utilisateur connectÃ© */
 router.get("/me", authenticate, (req, res) => {
-  const user = toUser(db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id));
-  res.json({ success: true, user });
+  const user = toUser(
+    db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id)
+  );
+  return res.json({ success: true, user });
 });
 
-/** PUT /auth/me â€” mise Ã  jour du profil */
 router.put("/me", authenticate, (req, res) => {
   const { name, surname, profession, neighborhood, bio, skills, avatar } = req.body;
-  db.prepare(`UPDATE users SET
+
+  db.prepare(`
+    UPDATE users SET
       name = COALESCE(?, name),
       surname = COALESCE(?, surname),
       profession = COALESCE(?, profession),
@@ -269,12 +367,27 @@ router.put("/me", authenticate, (req, res) => {
       bio = COALESCE(?, bio),
       skills = COALESCE(?, skills),
       avatar = COALESCE(?, avatar)
-    WHERE id = ?`)
-    .run(name, surname, profession, neighborhood,
-      bio, skills ? JSON.stringify(skills) : undefined, avatar, req.user.id);
+    WHERE id = ?
+  `).run(
+    name,
+    surname,
+    profession,
+    neighborhood,
+    bio,
+    skills ? JSON.stringify(skills) : undefined,
+    avatar,
+    req.user.id
+  );
 
-  const user = toUser(db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id));
-  res.json({ success: true, message: "Profil mis Ã  jour", user });
+  const user = toUser(
+    db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id)
+  );
+
+  return res.json({
+    success: true,
+    message: "Profil mis à jour",
+    user,
+  });
 });
 
 module.exports = router;
