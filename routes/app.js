@@ -129,4 +129,125 @@ router.patch("/admin/withdrawals/:id", adminOnly, (req, res) => {
   res.json({ success: true, message: `Retrait marqué comme ${status}` });
 });
 
+/* =================== OPPORTUNITÉS =================== */
+
+const OPPORTUNITY_TYPES = new Set(["Emploi", "Stage", "Bourse", "Concours", "Projet", "Financement", "Appel d'offres", "Événement"]);
+
+function mapOpportunity(row) {
+  return {
+    id: row.id,
+    type: row.type,
+    title: row.title,
+    org: row.org,
+    country: row.country,
+    deadline: row.deadline,
+    description: row.description,
+    requirements: row.requirements,
+    url: row.url,
+    applyInfo: row.apply_info,
+    image: row.image,
+    color: row.color,
+    edition: row.edition,
+    active: Boolean(row.active),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function validHttpUrl(value) {
+  try {
+    const parsed = new URL(String(value));
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/** Liste publique : l'application peut la consulter à chaque ouverture. */
+router.get("/opportunities", (req, res) => {
+  const rows = db.prepare("SELECT * FROM opportunities WHERE active = 1 ORDER BY updated_at DESC, created_at DESC").all();
+  res.json({ success: true, opportunities: rows.map(mapOpportunity) });
+});
+
+/** Liste complète réservée au Président. */
+router.get("/admin/opportunities", adminOnly, (req, res) => {
+  const rows = db.prepare("SELECT * FROM opportunities ORDER BY updated_at DESC, created_at DESC").all();
+  res.json({ success: true, opportunities: rows.map(mapOpportunity) });
+});
+
+/** Création d'une opportunité par le Président. */
+router.post("/admin/opportunities", adminOnly, (req, res) => {
+  const body = req.body || {};
+  const required = ["type", "title", "deadline", "url"];
+  if (required.some((key) => !String(body[key] || "").trim())) {
+    return res.status(400).json({ success: false, message: "Type, titre, date limite et lien officiel sont obligatoires" });
+  }
+  if (!OPPORTUNITY_TYPES.has(String(body.type).trim())) {
+    return res.status(400).json({ success: false, message: "Catégorie d'opportunité invalide" });
+  }
+  if (!validHttpUrl(body.url)) {
+    return res.status(400).json({ success: false, message: "Le lien officiel doit commencer par http:// ou https://" });
+  }
+  const id = uuidv4();
+  db.prepare(`INSERT INTO opportunities
+    (id, type, title, org, country, deadline, description, requirements, url, apply_info, image, color, edition, active)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`).run(
+    id,
+    String(body.type).trim(),
+    String(body.title).trim(),
+    String(body.org || "").trim(),
+    String(body.country || "").trim(),
+    String(body.deadline).trim(),
+    String(body.description || "").trim(),
+    String(body.requirements || "").trim(),
+    String(body.url).trim(),
+    String(body.applyInfo || "").trim(),
+    String(body.image || "briefcase").trim(),
+    String(body.color || "#10B981").trim(),
+    String(body.edition || "").trim(),
+  );
+  const row = db.prepare("SELECT * FROM opportunities WHERE id = ?").get(id);
+  res.status(201).json({ success: true, opportunity: mapOpportunity(row) });
+});
+
+/** Modification complète partielle d'une opportunité par le Président. */
+router.patch("/admin/opportunities/:id", adminOnly, (req, res) => {
+  const current = db.prepare("SELECT * FROM opportunities WHERE id = ?").get(req.params.id);
+  if (!current) return res.status(404).json({ success: false, message: "Opportunité introuvable" });
+  const body = req.body || {};
+  const type = body.type === undefined ? current.type : String(body.type).trim();
+  const url = body.url === undefined ? current.url : String(body.url).trim();
+  if (!OPPORTUNITY_TYPES.has(type)) return res.status(400).json({ success: false, message: "Catégorie d'opportunité invalide" });
+  if (!validHttpUrl(url)) return res.status(400).json({ success: false, message: "Lien officiel invalide" });
+  const fields = {
+    type,
+    title: body.title === undefined ? current.title : String(body.title).trim(),
+    org: body.org === undefined ? current.org : String(body.org).trim(),
+    country: body.country === undefined ? current.country : String(body.country).trim(),
+    deadline: body.deadline === undefined ? current.deadline : String(body.deadline).trim(),
+    description: body.description === undefined ? current.description : String(body.description).trim(),
+    requirements: body.requirements === undefined ? current.requirements : String(body.requirements).trim(),
+    url,
+    apply_info: body.applyInfo === undefined ? current.apply_info : String(body.applyInfo).trim(),
+    image: body.image === undefined ? current.image : String(body.image).trim(),
+    color: body.color === undefined ? current.color : String(body.color).trim(),
+    edition: body.edition === undefined ? current.edition : String(body.edition).trim(),
+    active: body.active === undefined ? current.active : (body.active ? 1 : 0),
+  };
+  db.prepare(`UPDATE opportunities SET type=@type, title=@title, org=@org, country=@country,
+    deadline=@deadline, description=@description, requirements=@requirements, url=@url,
+    apply_info=@apply_info, image=@image, color=@color, edition=@edition, active=@active,
+    updated_at=datetime('now') WHERE id=@id`).run({ ...fields, id: req.params.id });
+  const row = db.prepare("SELECT * FROM opportunities WHERE id = ?").get(req.params.id);
+  res.json({ success: true, opportunity: mapOpportunity(row) });
+});
+
+/** Désactivation logique : l'offre reste dans l'historique admin mais disparaît des utilisateurs. */
+router.delete("/admin/opportunities/:id", adminOnly, (req, res) => {
+  const result = db.prepare("UPDATE opportunities SET active = 0, updated_at = datetime('now') WHERE id = ?").run(req.params.id);
+  if (!result.changes) return res.status(404).json({ success: false, message: "Opportunité introuvable" });
+  res.json({ success: true, message: "Opportunité désactivée" });
+});
+
 module.exports = router;
+
