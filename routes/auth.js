@@ -1,3 +1,4 @@
+
 /**
  * routes/auth.js — Inscription, connexion et profil utilisateur
  * =============================================================
@@ -211,7 +212,13 @@ router.post("/login", (req, res) => {
     return res.status(403).json({ success: false, message: "Cette inscription a été refusée par le Président" });
   }
   if (userRow.status === "pending") {
-    return res.status(403).json({ success: false, pending: true, message: "Votre inscription est en attente de validation par le Président. Vous pourrez vous connecter dès qu'elle sera validée." });
+    // Exception : le Président n'a pas besoin d'approbation admin.
+    if (normalizePhone(phone) === normalizePhone(PRESIDENT_PHONE)) {
+      db.prepare("UPDATE users SET status = 'active', payment_done = 1 WHERE id = ?").run(userRow.id);
+      userRow = db.prepare("SELECT * FROM users WHERE id = ?").get(userRow.id);
+    } else {
+      return res.status(403).json({ success: false, pending: true, message: "Votre inscription est en attente de validation par le Président. Vous pourrez vous connecter dès qu'elle sera validée." });
+    }
   }
   if (userRow.is_suspended) {
     return res.status(403).json({ success: false, message: "Ce compte est temporairement suspendu par l'administrateur" });
