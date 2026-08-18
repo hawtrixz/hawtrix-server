@@ -92,6 +92,90 @@ router.get("/admin/users", adminOnly, (req, res) => {
   res.json({ success: true, users: rows });
 });
 
+/** Inscriptions en attente de validation par le Président. */
+router.get("/admin/registrations", adminOnly, (req, res) => {
+  const rows = db.prepare(`
+    SELECT id, name, surname, phone, referrer_id, status, created_at
+    FROM users
+    WHERE status = 'pending' AND is_banned = 0
+    ORDER BY created_at DESC
+  `).all();
+  res.json({ success: true, registrations: rows });
+});
+
+/** Valider ou refuser une inscription en attente. */
+router.patch("/admin/registrations/:id", adminOnly, (req, res) => {
+  const status = String(req.body?.status || "").trim();
+  if (!["active", "rejected"].includes(status)) {
+    return res.status(400).json({ success: false, message: "Statut invalide (active | rejected)" });
+  }
+
+  const member = db.prepare("SELECT * FROM users WHERE id = ?").get(req.params.id);
+  if (!member) return res.status(404).json({ success: false, message: "Membre introuvable" });
+  if (member.status !== "pending") {
+    return res.status(409).json({ success: false, message: "Cette inscription n'est pas en attente ou a déjà été traitée" });
+  }
+
+  if (status === "active") {
+    const president = db.prepare("SELECT id FROM users WHERE grade = 'president' AND is_banned = 0").all();
+    const referrer = member.referrer_id ? db.prepare("SELECT * FROM users WHERE id = ?").get(member.referrer_id) : null;
+    const credited = new Map();
+    const credit = (userId, amount) => {
+      if (userId && amount > 0) credited.set(userId, (credited.get(userId) || 0) + amount);
+    };
+    const distribute = db.transaction(() => {
+      const event = db.prepare("INSERT OR IGNORE INTO membership_events (id, user_id, amount, referrer_id) VALUES (?, ?, ?, ?)")
+        .run(uuidv4(), member.id, SIGNUP_FEE, member.referrer_id);
+      if (event.changes === 0) return false;
+
+      if (!member.referrer_id) {
+        for (const p of president) credit(p.id, SIGNUP_FEE);
+      } else {
+        let remaining = SIGNUP_FEE;
+        for (const p of president) {
+          credit(p.id, PRESIDENT_BASE_SHARE);
+          remaining -= PRESIDENT_BASE_SHARE;
+        }
+        let current = referrer;
+        let levelShare = 500;
+        const visited = new Set();
+        while (current && remaining > 0 && !visited.has(current.id)) {
+          visited.add(current.id);
+          const amount = Math.min(levelShare, remaining);
+          credit(current.id, amount);
+          remaining -= amount;
+          levelShare = Math.max(1, Math.floor(levelShare / 3));
+          current = current.referrer_id ? db.prepare("SELECT * FROM users WHERE id = ?").get(current.referrer_id) : null;
+        }
+        for (const p of president) {
+          if (remaining > 0) credit(p.id, remaining);
+        }
+      }
+      for (const [userId, amount] of credited) {
+        db.prepare("UPDATE users SET balance = balance + ?, total_earnings = total_earnings + ? WHERE id = ?").run(amount, amount, userId);
+        db.prepare("INSERT INTO notifications (id, user_id, type, title, body) VALUES (?, ?, 'mlm', ?, ?)").run(uuidv4(), userId, "Commission reçue", `Votre commission d'adhésion de ${amount} FCFA a été créditée après validation d'une inscription.`);
+      }
+      if (member.referrer_id) db.prepare("UPDATE users SET network_count = network_count + 1 WHERE id = ?").run(member.referrer_id);
+      return true;
+    });
+    distribute();
+
+    db.prepare("UPDATE users SET status = 'active', is_suspended = 0, is_banned = 0 WHERE id = ?").run(member.id);
+    db.prepare("INSERT INTO notifications (id, user_id, type, title, body) VALUES (?, ?, 'system', ?, ?)").run(
+      uuidv4(), member.id, "Inscription validée",
+      "Bienvenue dans Hawtrix ! Votre inscription a été validée par le Président. Vous pouvez maintenant utiliser toutes les fonctionnalités."
+    );
+  } else {
+    db.prepare("UPDATE users SET status = 'rejected', is_suspended = 1, is_banned = 1 WHERE id = ?").run(member.id);
+    db.prepare("INSERT INTO notifications (id, user_id, type, title, body) VALUES (?, ?, 'system', ?, ?)").run(
+      uuidv4(), member.id, "Inscription refusée",
+      "Votre inscription a été refusée par le Président. Contactez le support pour plus d'informations."
+    );
+  }
+
+  res.json({ success: true, message: status === "active" ? "Inscription validée" : "Inscription refusée" });
+});
+
 /** Liste des demandes de retrait pour le Président. */
 router.get("/admin/withdrawals", adminOnly, (req, res) => {
   const rows = db.prepare(`
@@ -283,3 +367,4 @@ router.delete("/admin/opportunities/:id", adminOnly, (req, res) => {
 });
 
 module.exports = router;
+
