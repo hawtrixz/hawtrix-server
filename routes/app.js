@@ -55,12 +55,23 @@ router.post("/withdrawals", authenticate, (req, res) => {
   }
 
   const id = uuidv4();
+  const cleanCode = (code || "").trim();
   db.prepare(`INSERT INTO withdrawals (id, user_id, amount, code) VALUES (?, ?, ?, ?)`)
-    .run(id, req.user.id, Number(amount), (code || "").trim());
-  // Déduire du solde immédiatement (remboursé si refusé par l'admin)
+    .run(id, req.user.id, Number(amount), cleanCode);
+  // Déduire du solde immédiatement (remboursé uniquement si le Président refuse).
   db.prepare("UPDATE users SET balance = balance - ? WHERE id = ?").run(Number(amount), req.user.id);
 
-  res.status(201).json({ success: true, message: "Demande de retrait envoyée. En attente de validation." });
+  // Notification persistante pour tous les comptes Président.
+  const presidents = db.prepare("SELECT id FROM users WHERE grade = 'president' AND is_banned = 0 AND is_suspended = 0").all();
+  const notifyPresident = db.prepare(`
+    INSERT INTO notifications (id, user_id, type, title, body)
+    VALUES (?, ?, 'system', 'Nouvelle demande de retrait', ?)
+  `);
+  const requesterName = `${req.user.surname || ""} ${req.user.name || ""}`.trim();
+  const body = `${requesterName} demande ${Number(amount)} FCFA. Référence : ${id}`;
+  for (const president of presidents) notifyPresident.run(uuidv4(), president.id, body);
+
+  res.status(201).json({ success: true, id, message: "Demande de retrait envoyée. En attente de validation." });
 });
 
 router.get("/withdrawals", authenticate, (req, res) => {
@@ -79,6 +90,18 @@ router.get("/admin/users", adminOnly, (req, res) => {
     FROM users ORDER BY created_at DESC
   `).all();
   res.json({ success: true, users: rows });
+});
+
+/** Liste des demandes de retrait pour le Président. */
+router.get("/admin/withdrawals", adminOnly, (req, res) => {
+  const rows = db.prepare(`
+    SELECT w.id, w.user_id, w.amount, w.status, w.code, w.created_at,
+      u.name, u.surname, u.phone, u.grade
+    FROM withdrawals w
+    JOIN users u ON u.id = w.user_id
+    ORDER BY CASE WHEN w.status = 'pending' THEN 0 ELSE 1 END, w.created_at DESC
+  `).all();
+  res.json({ success: true, withdrawals: rows });
 });
 
 /** Bannir / débannir un utilisateur */
@@ -119,12 +142,22 @@ router.patch("/admin/withdrawals/:id", adminOnly, (req, res) => {
 
   const w = db.prepare("SELECT * FROM withdrawals WHERE id = ?").get(req.params.id);
   if (!w) return res.status(404).json({ success: false, message: "Retrait introuvable" });
+  if (w.status !== "pending") {
+    return res.status(409).json({ success: false, message: "Cette demande a déjà été traitée" });
+  }
 
   if (status === "rejected") {
-    // Rembourser le solde
+    // Rembourser le solde une seule fois.
     db.prepare("UPDATE users SET balance = balance + ? WHERE id = ?").run(w.amount, w.user_id);
   }
-  db.prepare("UPDATE withdrawals SET status = ? WHERE id = ?").run(status, req.params.id);
+  db.prepare("UPDATE withdrawals SET status = ? WHERE id = ? AND status = 'pending'").run(status, req.params.id);
+
+  const title = status === "completed" ? "Retrait approuvé" : "Retrait refusé";
+  const body = status === "completed"
+    ? `Votre retrait de ${w.amount} FCFA a été approuvé par le Président.`
+    : `Votre retrait de ${w.amount} FCFA a été refusé. Le montant a été remboursé sur votre solde.`;
+  db.prepare(`INSERT INTO notifications (id, user_id, type, title, body) VALUES (?, ?, 'system', ?, ?)`)
+    .run(uuidv4(), w.user_id, title, body);
 
   res.json({ success: true, message: `Retrait marqué comme ${status}` });
 });
@@ -250,4 +283,3 @@ router.delete("/admin/opportunities/:id", adminOnly, (req, res) => {
 });
 
 module.exports = router;
-
