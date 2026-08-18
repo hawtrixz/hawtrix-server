@@ -131,6 +131,19 @@ try {
   if (!String(err.message).includes("duplicate column name")) throw err;
 }
 
+// Migration non destructive : les comptes existants restent actifs ("active"),
+// tandis que les nouvelles inscriptions démarrent en attente ("pending").
+try {
+  db.exec("ALTER TABLE users ADD COLUMN status TEXT");
+} catch (err) {
+  if (!String(err.message).includes("duplicate column name")) throw err;
+}
+try {
+  db.exec("UPDATE users SET status = 'active' WHERE status IS NULL");
+} catch (err) {
+  if (!String(err.message).includes("duplicate column")) throw err;
+}
+
 const normalizePhone = (phone) => String(phone || "").replace(/\D/g, "");
 const users = db.prepare("SELECT id, phone, normalized_phone FROM users").all();
 const updatePhone = db.prepare("UPDATE users SET normalized_phone = ? WHERE id = ?");
@@ -148,3 +161,4 @@ migratePhones();
 db.exec("CREATE INDEX IF NOT EXISTS idx_users_normalized_phone ON users (normalized_phone)");
 
 module.exports = db;
+
