@@ -81,6 +81,7 @@ function toUser(row) {
     inviteLimit: row.invite_limit,
     isBanned: !!row.is_banned,
     isSuspended: !!row.is_suspended,
+    status: row.status === "pending" || row.status === "rejected" ? row.status : "active",
     tutorialSeen: !!row.tutorial_seen,
     joinedAt: row.created_at,
   };
@@ -131,55 +132,32 @@ router.post("/register", (req, res) => {
 
   db.prepare(`
     INSERT INTO users (id, name, surname, phone, normalized_phone, profession, neighborhood,
-      referral_code, referrer_id, grade, password_hash)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      referral_code, referrer_id, grade, password_hash, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
   `).run(id, name.trim(), surname.trim(), normalizedPhone, normalizePhone(normalizedPhone),
     (profession || "").trim(), (neighborhood || "").trim(), referralCode, referrerId, initialGrade, passwordHash);
 
-  // L'inscription serveur réussie vaut adhésion payée de 2 000 FCFA.
-  // L'opération est enregistrée avant les crédits et protégée par UNIQUE(user_id),
-  // afin qu'une répétition de requête ne puisse jamais payer deux fois.
-  const president = findPresident();
-  const credited = new Map();
-  const credit = (userId, amount) => {
-    if (userId && amount > 0) credited.set(userId, (credited.get(userId) || 0) + amount);
-  };
-  const distributeMembership = db.transaction(() => {
-    const event = db.prepare("INSERT OR IGNORE INTO membership_events (id, user_id, amount, referrer_id) VALUES (?, ?, ?, ?)")
-      .run(uuidv4(), id, SIGNUP_FEE, referrerId);
-    if (event.changes === 0) return false;
-
-    // Répartition contractuelle de l'APK : 750 F President, 500 F direct,
-    // puis division par 3 à chaque niveau supérieur ; reliquat au President.
-    if (!referrerId) {
-      if (president) credit(president.id, SIGNUP_FEE);
-    } else {
-      let remaining = SIGNUP_FEE;
-      if (president) {
-        credit(president.id, PRESIDENT_BASE_SHARE);
-        remaining -= PRESIDENT_BASE_SHARE;
-      }
-      let current = referrer;
-      let levelShare = 500;
-      const visited = new Set();
-      while (current && remaining > 0 && !visited.has(current.id)) {
-        visited.add(current.id);
-        const amount = Math.min(levelShare, remaining);
-        credit(current.id, amount);
-        remaining -= amount;
-        levelShare = Math.max(1, Math.floor(levelShare / 3));
-        current = current.referrer_id ? db.prepare("SELECT * FROM users WHERE id = ?").get(current.referrer_id) : null;
-      }
-      if (president && remaining > 0) credit(president.id, remaining);
-    }
-    for (const [userId, amount] of credited) {
-      db.prepare("UPDATE users SET balance = balance + ?, total_earnings = total_earnings + ? WHERE id = ?").run(amount, amount, userId);
-      db.prepare("INSERT INTO notifications (id, user_id, type, title, body) VALUES (?, ?, 'mlm', ?, ?)").run(uuidv4(), userId, "Commission reçue", `Votre commission d'adhésion de ${amount} FCFA a été créditée.`);
-    }
-    if (referrerId) db.prepare("UPDATE users SET network_count = network_count + 1 WHERE id = ?").run(referrerId);
-    return true;
-  });
-  distributeMembership();
+  // Nouvelle inscription = EN ATTENTE de validation par le Président.
+  // Aucune commission n'est distribuée tant que le Président n'a pas validé.
+  const newMemberName = `${surname.trim()} ${name.trim()}`.trim();
+  const presidents = db.prepare("SELECT id, phone, name FROM users WHERE grade = 'president' AND is_banned = 0").all();
+  for (const president of presidents) {
+    db.prepare("INSERT INTO notifications (id, user_id, type, title, body) VALUES (?, ?, 'system', ?, ?)").run(
+      uuidv4(),
+      president.id,
+      "Nouvelle inscription en attente",
+      `${newMemberName} (${normalizedPhone}) demande à rejoindre Hawtrix. Pensez à vérifier et valider dans Administration → Inscriptions en attente.`
+    );
+  }
+  // Le parrain reçoit aussi la notification de demande (sans commission pour l'instant).
+  if (referrerId) {
+    db.prepare("INSERT INTO notifications (id, user_id, type, title, body) VALUES (?, ?, 'system', ?, ?)").run(
+      uuidv4(),
+      referrerId,
+      "Nouveau filleul en attente",
+      `Votre filleul ${newMemberName} (${normalizedPhone}) attend la validation du Président.`
+    );
+  }
 
   const user = toUser(db.prepare("SELECT * FROM users WHERE id = ?").get(id));
   const token = jwt.sign({ id: user.id }, SECRET, { expiresIn: "30d" });
@@ -228,6 +206,12 @@ router.post("/login", (req, res) => {
   if (userRow.is_banned) {
     return res.status(403).json({ success: false, message: "Ce compte a été banni par l'administrateur" });
   }
+  if (userRow.status === "rejected") {
+    return res.status(403).json({ success: false, message: "Cette inscription a été refusée par le Président" });
+  }
+  if (userRow.status === "pending") {
+    return res.status(403).json({ success: false, pending: true, message: "Votre inscription est en attente de validation par le Président. Vous pourrez vous connecter dès qu'elle sera validée." });
+  }
   if (userRow.is_suspended) {
     return res.status(403).json({ success: false, message: "Ce compte est temporairement suspendu par l'administrateur" });
   }
@@ -273,4 +257,85 @@ router.put("/me", authenticate, (req, res) => {
   res.json({ success: true, message: "Profil mis à jour", user });
 });
 
+
+/**
+ * PATCH /auth/registrations/:id — le Président valide ou refuse une inscription.
+ * Body : { status } avec "active" (validée) ou "rejected" (refusée).
+ * Lors de la validation, les commissions de l'adhésion de 2 000 FCFA sont
+ * distribuées exactement selon la logique contractuelle de l'APK.
+ */
+router.patch("/registrations/:id", adminOnly, (req, res) => {
+  const status = String(req.body?.status || "").trim();
+  if (!["active", "rejected"].includes(status)) {
+    return res.status(400).json({ success: false, message: "Statut invalide (active | rejected)" });
+  }
+
+  const member = db.prepare("SELECT * FROM users WHERE id = ?").get(req.params.id);
+  if (!member) return res.status(404).json({ success: false, message: "Membre introuvable" });
+  if (member.status !== "pending") {
+    return res.status(409).json({ success: false, message: "Cette inscription n'est pas en attente ou a déjà été traitée" });
+  }
+
+  if (status === "active") {
+    // Répartition contractuelle de l'APK : 750 F President, 500 F direct,
+    // puis division par 3 à chaque niveau supérieur ; reliquat au President.
+    const president = db.prepare("SELECT id FROM users WHERE grade = 'president' AND is_banned = 0").all();
+    const referrer = member.referrer_id ? db.prepare("SELECT * FROM users WHERE id = ?").get(member.referrer_id) : null;
+    const credited = new Map();
+    const credit = (userId, amount) => {
+      if (userId && amount > 0) credited.set(userId, (credited.get(userId) || 0) + amount);
+    };
+    const distribute = db.transaction(() => {
+      const event = db.prepare("INSERT OR IGNORE INTO membership_events (id, user_id, amount, referrer_id) VALUES (?, ?, ?, ?)")
+        .run(uuidv4(), member.id, SIGNUP_FEE, member.referrer_id);
+      if (event.changes === 0) return false;
+
+      if (!member.referrer_id) {
+        for (const p of president) credit(p.id, SIGNUP_FEE);
+      } else {
+        let remaining = SIGNUP_FEE;
+        for (const p of president) {
+          credit(p.id, PRESIDENT_BASE_SHARE);
+          remaining -= PRESIDENT_BASE_SHARE;
+        }
+        let current = referrer;
+        let levelShare = 500;
+        const visited = new Set();
+        while (current && remaining > 0 && !visited.has(current.id)) {
+          visited.add(current.id);
+          const amount = Math.min(levelShare, remaining);
+          credit(current.id, amount);
+          remaining -= amount;
+          levelShare = Math.max(1, Math.floor(levelShare / 3));
+          current = current.referrer_id ? db.prepare("SELECT * FROM users WHERE id = ?").get(current.referrer_id) : null;
+        }
+        for (const p of president) {
+          if (remaining > 0) credit(p.id, remaining);
+        }
+      }
+      for (const [userId, amount] of credited) {
+        db.prepare("UPDATE users SET balance = balance + ?, total_earnings = total_earnings + ? WHERE id = ?").run(amount, amount, userId);
+        db.prepare("INSERT INTO notifications (id, user_id, type, title, body) VALUES (?, ?, 'mlm', ?, ?)").run(uuidv4(), userId, "Commission reçue", `Votre commission d'adhésion de ${amount} FCFA a été créditée après validation d'une inscription.`);
+      }
+      if (member.referrer_id) db.prepare("UPDATE users SET network_count = network_count + 1 WHERE id = ?").run(member.referrer_id);
+      return true;
+    });
+    distribute();
+
+    db.prepare("UPDATE users SET status = 'active', is_suspended = 0, is_banned = 0 WHERE id = ?").run(member.id);
+    db.prepare("INSERT INTO notifications (id, user_id, type, title, body) VALUES (?, ?, 'system', ?, ?)").run(
+      uuidv4(), member.id, "Inscription validée",
+      "Bienvenue dans Hawtrix ! Votre inscription a été validée par le Président. Vous pouvez maintenant utiliser toutes les fonctionnalités."
+    );
+  } else {
+    db.prepare("UPDATE users SET status = 'rejected', is_suspended = 1, is_banned = 1 WHERE id = ?").run(member.id);
+    db.prepare("INSERT INTO notifications (id, user_id, type, title, body) VALUES (?, ?, 'system', ?, ?)").run(
+      uuidv4(), member.id, "Inscription refusée",
+      "Votre inscription a été refusée par le Président. Contactez le support pour plus d'informations."
+    );
+  }
+
+  res.json({ success: true, message: status === "active" ? "Inscription validée" : "Inscription refusée" });
+});
 module.exports = router;
+
