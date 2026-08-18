@@ -350,3 +350,4 @@ router.patch("/registrations/:id", adminOnly, (req, res) => {
 
   res.json({ success: true, message: `Inscription ${status === "active" ? "validée" : "refusée"}` });
 });
+module.exports = router;
