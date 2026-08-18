@@ -39,7 +39,7 @@ function findReferrer(code) {
   if (!wanted) return null;
   const rows = db.prepare("SELECT * FROM users").all();
   const president = rows.find((row) => normalizePhone(row.phone) === normalizePhone(PRESIDENT_PHONE));
-  // Compatibilité avec l’ancien code affiché localement par l’APK.
+  // Compatibilité avec l'ancien code affiché localement par l'APK.
   if (raw === "HWTPRESIDENT" || raw === "PRESIDENT") return president || null;
   return rows.find((row) => normalizeReferralCode(row.referral_code) === wanted) || null;
 }
@@ -81,6 +81,7 @@ function toUser(row) {
     inviteLimit: row.invite_limit,
     isBanned: !!row.is_banned,
     isSuspended: !!row.is_suspended,
+    paymentDone: !!row.payment_done,
     status: row.status === "pending" || row.status === "rejected" ? row.status : "active",
     tutorialSeen: !!row.tutorial_seen,
     joinedAt: row.created_at,
@@ -216,6 +217,19 @@ router.post("/login", (req, res) => {
     return res.status(403).json({ success: false, message: "Ce compte est temporairement suspendu par l'administrateur" });
   }
 
+  // Migration transparente : les comptes déjà actifs ou ayant un historique
+  // (réseau, gains, grade président) ont déjà réglé leur activation de 2000 F.
+  // Ils ne doivent JAMAIS revoir la page de paiement.
+  if (userRow.payment_done === 0 && (
+    userRow.grade === "president" ||
+    Number(userRow.total_earnings || 0) > 0 ||
+    Number(userRow.network_count || 0) > 0 ||
+    userRow.status === "active"
+  )) {
+    db.prepare("UPDATE users SET payment_done = 1 WHERE id = ?").run(userRow.id);
+    userRow.payment_done = 1;
+  }
+
   const user = toUser(userRow);
   const token = jwt.sign({ id: user.id }, SECRET, { expiresIn: "30d" });
 
@@ -256,7 +270,6 @@ router.put("/me", authenticate, (req, res) => {
   const user = toUser(db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id));
   res.json({ success: true, message: "Profil mis à jour", user });
 });
-
 
 /**
  * PATCH /auth/registrations/:id — le Président valide ou refuse une inscription.
@@ -322,20 +335,18 @@ router.patch("/registrations/:id", adminOnly, (req, res) => {
     });
     distribute();
 
-    db.prepare("UPDATE users SET status = 'active', is_suspended = 0, is_banned = 0 WHERE id = ?").run(member.id);
+    db.prepare("UPDATE users SET status = 'active', payment_done = 1 WHERE id = ?").run(member.id);
     db.prepare("INSERT INTO notifications (id, user_id, type, title, body) VALUES (?, ?, 'system', ?, ?)").run(
       uuidv4(), member.id, "Inscription validée",
-      "Bienvenue dans Hawtrix ! Votre inscription a été validée par le Président. Vous pouvez maintenant utiliser toutes les fonctionnalités."
+      "Bienvenue dans Hawtrix ! Votre inscription a été validée par le Président. Votre activation de 2000 FCFA est prise en compte."
     );
   } else {
-    db.prepare("UPDATE users SET status = 'rejected', is_suspended = 1, is_banned = 1 WHERE id = ?").run(member.id);
+    db.prepare("UPDATE users SET status = 'rejected' WHERE id = ?").run(member.id);
     db.prepare("INSERT INTO notifications (id, user_id, type, title, body) VALUES (?, ?, 'system', ?, ?)").run(
       uuidv4(), member.id, "Inscription refusée",
-      "Votre inscription a été refusée par le Président. Contactez le support pour plus d'informations."
+      "Votre inscription a été refusée par le Président. Contactez l'administration pour plus d'informations."
     );
   }
 
-  res.json({ success: true, message: status === "active" ? "Inscription validée" : "Inscription refusée" });
+  res.json({ success: true, message: `Inscription ${status === "active" ? "validée" : "refusée"}` });
 });
-module.exports = router;
-
