@@ -11,7 +11,7 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { v4: uuidv4 } = require("uuid");
 const db = require("../db/database");
-const { authenticate } = require("../middleware/auth");
+const { authenticate, adminOnly } = require("../middleware/auth");
 
 const router = express.Router();
 const PRESIDENT_PHONE = "+22890496651";
