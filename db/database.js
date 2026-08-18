@@ -148,4 +148,3 @@ migratePhones();
 db.exec("CREATE INDEX IF NOT EXISTS idx_users_normalized_phone ON users (normalized_phone)");
 
 module.exports = db;
-
