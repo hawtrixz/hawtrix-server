@@ -14,8 +14,29 @@ const { authenticate } = require("../middleware/auth");
 
 const router = express.Router();
 
+async function sendExpoPush(pushToken, title, body, data) {
+  if (!pushToken || !String(pushToken).startsWith("ExponentPushToken[")) return;
+  try {
+    await fetch("https://exp.host/--/api/v2/push/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        to: pushToken,
+        sound: "default",
+        title,
+        body,
+        data,
+        channelId: "messages",
+        priority: "high",
+      }),
+    });
+  } catch {
+    // La notification SQLite reste disponible même si Expo est momentanément indisponible.
+  }
+}
+
 /**
- * GET /chat/conversations
+ * GET /conversations
  * Retourne la liste des conversations avec le dernier message et le nombre de non-lus.
  */
 router.get("/conversations", authenticate, (req, res) => {
@@ -47,21 +68,14 @@ router.get("/users", authenticate, (req, res) => {
   if (q) {
     const like = `%${q}%`;
     rows = db.prepare(`
-      SELECT id, name, surname, phone, profession, neighborhood,
-        referral_code, is_banned, is_suspended
-      FROM users
-      WHERE (name LIKE ? OR surname LIKE ? OR phone LIKE ?
-        OR profession LIKE ? OR neighborhood LIKE ?)
-        AND id != ?
+      SELECT id, name, surname, phone, profession, neighborhood, referral_code, is_banned, is_suspended
+      FROM users WHERE (name LIKE ? OR surname LIKE ? OR phone LIKE ? OR profession LIKE ? OR neighborhood LIKE ?) AND id != ?
       LIMIT 30
     `).all(like, like, like, like, like, req.user.id);
   } else {
     rows = db.prepare(`
-      SELECT id, name, surname, phone, profession, neighborhood,
-        referral_code, is_banned, is_suspended
-      FROM users
-      WHERE id != ? AND is_banned = 0
-      ORDER BY created_at DESC LIMIT 30
+      SELECT id, name, surname, phone, profession, neighborhood, referral_code, is_banned, is_suspended
+      FROM users WHERE id != ? AND is_banned = 0 ORDER BY created_at DESC LIMIT 30
     `).all(req.user.id);
   }
   res.json({ success: true, users: rows });
@@ -103,26 +117,12 @@ router.post("/conversations", authenticate, (req, res) => {
  * GET /chat/conversations/:id
  * Retourne les messages d'une conversation (avec marquage "lu").
  */
-router.get("/conversations/:id", authenticate, (req, res) => {const conversation = db.prepare(
-  "SELECT * FROM conversations WHERE id = ?"
-).get(req.params.id);
-
-if (!conversation) {
-  return res.status(404).json({
-    success: false,
-    message: "Conversation introuvable",
-  });
-}
-
-if (
-  conversation.user_a_id !== req.user.id &&
-  conversation.user_b_id !== req.user.id
-) {
-  return res.status(403).json({
-    success: false,
-    message: "Accès refusé à cette conversation",
-  });
-}
+router.get("/conversations/:id", authenticate, (req, res) => {
+  const conversation = db.prepare("SELECT * FROM conversations WHERE id = ?").get(req.params.id);
+  if (!conversation) return res.status(404).json({ success: false, message: "Conversation introuvable" });
+  if (conversation.user_a_id !== req.user.id && conversation.user_b_id !== req.user.id) {
+    return res.status(403).json({ success: false, message: "Accès refusé à cette conversation" });
+  }
 
   const messages = db.prepare(`
     SELECT m.*, u.name, u.surname
@@ -167,10 +167,21 @@ router.post("/conversations/:id", authenticate, (req, res) => {
   const recipientId = conv.user_a_id === req.user.id ? conv.user_b_id : conv.user_a_id;
   const recipient = db.prepare("SELECT name, surname FROM users WHERE id = ?").get(recipientId);
 
-  // Notification pour le destinataire
+  const preview = `${req.user.name} ${req.user.surname} : ${String(text).trim().slice(0, 60)}`;
+
+  // Notification persistante pour l'écran Notifications de l'APK.
   db.prepare(`INSERT INTO notifications (id, user_id, type, title, body)
     VALUES (?, ?, 'message', 'Nouveau message', ?)`)
-    .run(uuidv4(), recipientId, `${req.user.name} ${req.user.surname} : ${String(text).trim().slice(0, 60)}`);
+    .run(uuidv4(), recipientId, preview);
+
+  // Notification système Android via Expo Push. Elle ne bloque jamais l'envoi du message.
+  const recipientRow = db.prepare("SELECT push_token FROM users WHERE id = ?").get(recipientId);
+  void sendExpoPush(
+    recipientRow?.push_token,
+    "Nouveau message",
+    preview,
+    { type: "message", conversationId: req.params.id, participantName: `${req.user.name} ${req.user.surname}` },
+  );
 
   res.status(201).json({
     success: true,
