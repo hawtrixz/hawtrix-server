@@ -20,6 +20,10 @@ const { authenticate, adminOnly } = require("../middleware/auth");
 
 const router = express.Router();
 
+/* Montant d'adhésion et part minimale du Président (cohérent avec le plan Hawtrix). */
+const SIGNUP_FEE = Number(process.env.SIGNUP_FEE || 2000);
+const PRESIDENT_BASE_SHARE = Number(process.env.PRESIDENT_BASE_SHARE || 200);
+
 /* =================== NOTIFICATIONS =================== */
 
 router.get("/notifications", authenticate, (req, res) => {
@@ -327,44 +331,45 @@ router.post("/admin/opportunities", adminOnly, (req, res) => {
   res.status(201).json({ success: true, opportunity: mapOpportunity(row) });
 });
 
-/** Modification complète partielle d'une opportunité par le Président. */
+/** Modification partielle d'une opportunité par le Président. */
 router.patch("/admin/opportunities/:id", adminOnly, (req, res) => {
-  const current = db.prepare("SELECT * FROM opportunities WHERE id = ?").get(req.params.id);
+  const current = db
+    .prepare("SELECT * FROM opportunities WHERE id = ?")
+    .get(req.params.id);
   if (!current) return res.status(404).json({ success: false, message: "Opportunité introuvable" });
+
   const body = req.body || {};
-  const type = body.type === undefined ? current.type : String(body.type).trim();
-  const url = body.url === undefined ? current.url : String(body.url).trim();
-  if (!OPPORTUNITY_TYPES.has(type)) return res.status(400).json({ success: false, message: "Catégorie d'opportunité invalide" });
-  if (!validHttpUrl(url)) return res.status(400).json({ success: false, message: "Lien officiel invalide" });
-  const fields = {
-    type,
-    title: body.title === undefined ? current.title : String(body.title).trim(),
-    org: body.org === undefined ? current.org : String(body.org).trim(),
-    country: body.country === undefined ? current.country : String(body.country).trim(),
-    deadline: body.deadline === undefined ? current.deadline : String(body.deadline).trim(),
-    description: body.description === undefined ? current.description : String(body.description).trim(),
-    requirements: body.requirements === undefined ? current.requirements : String(body.requirements).trim(),
-    url,
-    apply_info: body.applyInfo === undefined ? current.apply_info : String(body.applyInfo).trim(),
-    image: body.image === undefined ? current.image : String(body.image).trim(),
-    color: body.color === undefined ? current.color : String(body.color).trim(),
-    edition: body.edition === undefined ? current.edition : String(body.edition).trim(),
-    active: body.active === undefined ? current.active : (body.active ? 1 : 0),
+  const apply = (field, column, transform) => {
+    if (body[field] !== undefined) {
+      const value = transform ? transform(body[field]) : body[field];
+      if (value !== null) db.prepare(`UPDATE opportunities SET ${column} = ? WHERE id = ?`).run(value, current.id);
+    }
   };
-  db.prepare(`UPDATE opportunities SET type=@type, title=@title, org=@org, country=@country,
-    deadline=@deadline, description=@description, requirements=@requirements, url=@url,
-    apply_info=@apply_info, image=@image, color=@color, edition=@edition, active=@active,
-    updated_at=datetime('now') WHERE id=@id`).run({ ...fields, id: req.params.id });
-  const row = db.prepare("SELECT * FROM opportunities WHERE id = ?").get(req.params.id);
+
+  apply("type", "type", (v) => (OPPORTUNITY_TYPES.has(String(v).trim()) ? String(v).trim() : null));
+  apply("title", "title", (v) => String(v).trim());
+  apply("org", "org", (v) => String(v).trim());
+  apply("country", "country", (v) => String(v).trim());
+  apply("deadline", "deadline", (v) => String(v).trim());
+  apply("description", "description", (v) => String(v).trim());
+  apply("requirements", "requirements", (v) => String(v).trim());
+  apply("url", "url", (v) => (validHttpUrl(v) ? String(v).trim() : null));
+  apply("applyInfo", "apply_info", (v) => String(v).trim());
+  apply("image", "image", (v) => String(v).trim());
+  apply("color", "color", (v) => String(v).trim());
+  apply("edition", "edition", (v) => String(v).trim());
+  if (typeof body.active === "boolean") {
+    db.prepare("UPDATE opportunities SET active = ? WHERE id = ?").run(body.active ? 1 : 0, current.id);
+  }
+
+  const row = db.prepare("SELECT * FROM opportunities WHERE id = ?").get(current.id);
   res.json({ success: true, opportunity: mapOpportunity(row) });
 });
 
-/** Désactivation logique : l'offre reste dans l'historique admin mais disparaît des utilisateurs. */
+/** Désactiver (supprimer) une opportunité : on la passe à active = 0 plutôt que de la détruire. */
 router.delete("/admin/opportunities/:id", adminOnly, (req, res) => {
-  const result = db.prepare("UPDATE opportunities SET active = 0, updated_at = datetime('now') WHERE id = ?").run(req.params.id);
-  if (!result.changes) return res.status(404).json({ success: false, message: "Opportunité introuvable" });
+  db.prepare("UPDATE opportunities SET active = 0 WHERE id = ?").run(req.params.id);
   res.json({ success: true, message: "Opportunité désactivée" });
 });
 
 module.exports = router;
-
