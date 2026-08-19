@@ -79,6 +79,7 @@ app.get("/api/version", (req, res) => {
 app.use("/auth", require("./routes/auth"));
 app.use("/chat", require("./routes/chat"));
 app.use("/", require("./routes/app"));
+app.use("/ai", require("./routes/ai"));
 
 // Route 404 propre.
 app.use((req, res) => {
