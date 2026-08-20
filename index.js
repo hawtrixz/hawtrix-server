@@ -4,7 +4,6 @@
  * API REST Hawtrix avec information de mise à jour facultative.
  * Les anciennes APK ne sont jamais bloquées par le serveur.
  */
-
 require("dotenv").config();
 
 const express = require("express");
