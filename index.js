@@ -26,20 +26,25 @@ const SERVER_VERSION = "2.89.3";
  * Route de santé du serveur.
  */
 app.get("/", (req, res) => {
-  res.json({
-    success: true,
-    service: "Hawtrix API",
-    version: SERVER_VERSION,
-    message: "Le serveur fonctionne.",
-    docs: {
-      auth: "POST /auth/register, POST /auth/login, GET /auth/me",
-      chat: "GET/POST /chat/conversations, GET/POST /chat/conversations/:id",
-      notifications: "GET /notifications, PUT /notifications/:id",
-      withdrawals: "POST /withdrawals, GET /withdrawals",
-      admin: "GET /admin/users, PATCH /admin/users/:id/ban, POST /admin/notifications",
-      version: "GET /version.json"
-    }
-  });
+  res.send(`
+    <html>
+      <head>
+        <title>Hawtrix API</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+          body { font-family: sans-serif; text-align: center; padding: 50px; background: #0A1628; color: white; }
+          .btn { display: inline-block; background: #25D366; color: white; padding: 15px 30px; text-decoration: none; border-radius: 10px; font-weight: bold; margin-top: 20px; }
+          h1 { color: #FF6B00; }
+        </style>
+      </head>
+      <body>
+        <h1>Bienvenue sur Hawtrix</h1>
+        <p>Le serveur est opérationnel.</p>
+        <p>Besoin d'aide ou d'un code d'activation ?</p>
+        <a href="https://wa.me/message/ITZ45LLE2RKSM1" class="btn">Contacter le support WhatsApp</a>
+      </body>
+    </html>
+  `);
 });
 
 /**
