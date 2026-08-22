@@ -59,14 +59,13 @@ function makeReferralCode() {
   throw new Error("Impossible de générer un code de parrainage unique");
 }
 
-/** Transforme la ligne SQL en objet utilisateur propre avec sécurité paiement */
+/** Transforme la ligne SQL en objet utilisateur avec VERROUILLAGE PAIEMENT */
 function toUser(row) {
   if (!row) return null;
   
-  // Le paiement est considéré fait SEULEMENT si le statut est 'active'
-  // ou si c'est le Président lui-même (+22890496651).
+  // SEULEMENT le Président (+22890496651) ou les membres 'active' sont considérés comme payés.
   const isPresident = normalizePhone(row.phone) === normalizePhone(PRESIDENT_PHONE);
-  const isPaid = isPresident || row.status === "active" || row.payment_done === 1;
+  const isPaid = isPresident || (row.status === "active" && row.payment_done === 1);
 
   return {
     id: row.id,
@@ -89,7 +88,7 @@ function toUser(row) {
     isBanned: !!row.is_banned,
     isSuspended: !!row.is_suspended,
     status: row.status || "pending",
-    paymentDone: isPaid, // Information CRITIQUE pour l'APK
+    paymentDone: isPaid, // L'APK actuelle lira cette valeur pour bloquer l'accès
     tutorialSeen: !!row.tutorial_seen,
     joinedAt: row.created_at,
   };
