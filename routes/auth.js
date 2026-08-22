@@ -146,16 +146,30 @@ router.post("/register", (req, res) => {
 
   // Nouvelle inscription = EN ATTENTE de validation par le Président.
   // Aucune commission n'est distribuée tant que le Président n'a pas validé.
-  const newMemberName = `${surname.trim()} ${name.trim()}`.trim();
+    const newMemberName = `${surname.trim()} ${name.trim()}`.trim();
   const presidents = db.prepare("SELECT id, phone, name FROM users WHERE grade = 'president' AND is_banned = 0").all();
+  
+  // Notification pour le Président avec lien WhatsApp
   for (const president of presidents) {
+    const waLink = `https://wa.me/${normalizedPhone.replace(/\+/g, "")}`;
     db.prepare("INSERT INTO notifications (id, user_id, type, title, body) VALUES (?, ?, 'system', ?, ?)").run(
       uuidv4(),
       president.id,
       "Nouvelle inscription en attente",
-      `${newMemberName} (${normalizedPhone}) demande à rejoindre Hawtrix. Pensez à vérifier et valider dans Administration → Inscriptions en attente.`
+      `Membre : ${newMemberName}\nNuméro : ${normalizedPhone}\n\nCliquez pour lui envoyer son code sur WhatsApp : ${waLink}`
     );
   }
+
+  // Notification pour le parrain
+  if (referrerId) {
+    db.prepare("INSERT INTO notifications (id, user_id, type, title, body) VALUES (?, ?, 'system', ?, ?)").run(
+      uuidv4(),
+      referrerId,
+      "Nouveau filleul en attente",
+      `Votre filleul ${newMemberName} (${normalizedPhone}) attend la validation du Président.`
+    );
+  }
+
   // Le parrain reçoit aussi la notification de demande (sans commission pour l'instant).
   if (referrerId) {
     db.prepare("INSERT INTO notifications (id, user_id, type, title, body) VALUES (?, ?, 'system', ?, ?)").run(
