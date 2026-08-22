@@ -59,9 +59,15 @@ function makeReferralCode() {
   throw new Error("Impossible de générer un code de parrainage unique");
 }
 
-/** Transforme la ligne SQL en objet utilisateur propre */
+/** Transforme la ligne SQL en objet utilisateur propre avec sécurité paiement */
 function toUser(row) {
   if (!row) return null;
+  
+  // Le paiement est considéré fait SEULEMENT si le statut est 'active'
+  // ou si c'est le Président lui-même (+22890496651).
+  const isPresident = normalizePhone(row.phone) === normalizePhone(PRESIDENT_PHONE);
+  const isPaid = isPresident || row.status === "active" || row.payment_done === 1;
+
   return {
     id: row.id,
     name: row.name,
@@ -82,8 +88,8 @@ function toUser(row) {
     inviteLimit: row.invite_limit,
     isBanned: !!row.is_banned,
     isSuspended: !!row.is_suspended,
-    paymentDone: !!row.payment_done,
-    status: row.status === "pending" || row.status === "rejected" ? row.status : "active",
+    status: row.status || "pending",
+    paymentDone: isPaid, // Information CRITIQUE pour l'APK
     tutorialSeen: !!row.tutorial_seen,
     joinedAt: row.created_at,
   };
