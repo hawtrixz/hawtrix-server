@@ -90,7 +90,8 @@ router.get("/withdrawals", authenticate, (req, res) => {
 router.get("/admin/users", adminOnly, (req, res) => {
   const rows = db.prepare(`
     SELECT id, name, surname, phone, profession, neighborhood, referrer_id,
-      grade, balance, total_earnings, network_count, is_banned, is_suspended, created_at
+      grade, balance, total_earnings, network_count, is_banned, is_suspended, 
+      status, payment_done, created_at
     FROM users ORDER BY created_at DESC
   `).all();
   res.json({ success: true, users: rows });
