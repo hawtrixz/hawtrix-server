@@ -20,6 +20,12 @@ const { authenticate, adminOnly } = require("../middleware/auth");
 
 const router = express.Router();
 
+// Paramètres utilisés lors de la validation d'une inscription.
+// Ils doivent être définis dans ce fichier, car la route de validation
+// ci-dessous les utilise pour distribuer les 2 000 FCFA d'adhésion.
+const SIGNUP_FEE = 2000;
+const PRESIDENT_BASE_SHARE = 750;
+
 /* =================== NOTIFICATIONS =================== */
 
 router.get("/notifications", authenticate, (req, res) => {
